@@ -1,0 +1,19 @@
+[package]
+name = "potions_balance"
+version = "0.1.0"
+authors = ["Warlock <internalmike@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+winapi_gui = { path = "../winapi_gui" }
+winapi = "0.3.8"
+rust-ini = "0.15.3"
+filetime = "0.2.10"
+esl = "0.4.0"
+encoding = "0.2.33"
+either = "1.5.3"
+winreg = "0.7.0"
+dyn-fmt = "0.2.2"
+
+[build-dependencies]
+embed-resource = "1.3.3"
