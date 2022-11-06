@@ -160,7 +160,8 @@ fn main() -> ExitCode {
         .version(env!("CARGO_PKG_VERSION"))
         .disable_colored_help(true)
         .after_help("Report bugs to <internalmike@gmail.com> (in English or Russian).")
-        .about("Helps to tune potions attributes.")
+        .about("Morrowind potions attributes balancing tool.")
+        .help_template("Usage: {usage}\n\n{about}\n\n{subcommands}\n\n{options}{after-help}")
         .disable_help_subcommand(true)
         .disable_help_flag(true)
         .arg(Arg::new("help")
@@ -177,11 +178,12 @@ fn main() -> ExitCode {
             .action(ArgAction::SetTrue)
         )
         .subcommand(Command::new("scan")
-            .about("\
+            .about("Scan game config and build .esp file with all potions")
+            .before_help("\
                 Scan <CONFIG FILE> for enabled plugins and build <OUTPUT.esp> file \
-                with all potions (without additional modifications\
+                with all potions (without additional modifications)\
             ")
-            .help_template("Usage: {usage}\n\n{about}{options}")
+            .help_template("Usage: {usage}\n\n{before-help}{options}")
             .arg(Arg::new("help")
                 .short('h')
                 .long("help")
@@ -214,8 +216,9 @@ fn main() -> ExitCode {
             )
         )
         .subcommand(Command::new("init")
-            .about("Create <OUTPUT.csv> with potions balance info")
-            .help_template("Usage: {usage}\n\n{about}{options}")
+            .about("Create .csv file with potions attributes info")
+            .before_help("Create <OUTPUT.csv> with potions attributes info")
+            .help_template("Usage: {usage}\n\n{before-help}{options}")
             .arg(Arg::new("help")
                 .short('h')
                 .long("help")
