@@ -6,7 +6,7 @@ use csv::StringRecord;
 use either::{Left, Right};
 use encoding::{DecoderTrap, Encoding};
 use encoding::all::WINDOWS_1251;
-use esl::{ALCH, Field, FileMetadata, FileType, HEDR, NAME, Record, RecordFlags, TES3};
+use esl::{ALCH, ALDT, ENAM, Field, FileMetadata, FileType, HEDR, NAME, Record, RecordFlags, TES3};
 use esl::EffectIndex;
 use esl::code::{self, CodePage};
 use esl::read::{RecordReadMode, Records};
@@ -21,136 +21,6 @@ use std::mem::transmute;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
-
-/*
-fn parse_args() -> (Options, Vec<Option<PathBuf>>) {
-    let args = Command::new("ESP Assembler/Disassembler")
-        .version(env!("CARGO_PKG_VERSION"))
-        .disable_colored_help(true)
-        .help_template("Usage: {usage}\n{about}\n\n{options}\n\n{after-help}")
-        .after_help("<COND> can be in one of the following form: RECORD_TAG, RECORD_TAG>:FIELD_TAG, or :FIELD_TAG.\n\n\
-            When FILE is -, read standard input.\n\n\
-            Report bugs to <internalmike@gmail.com> (in English or Russian).\
-        ")
-        .about("Convert FILEs from the .esm/.esp/.ess format to YAML and back.")
-        .disable_help_flag(true)
-        .arg(Arg::new("help")
-            .short('h')
-            .long("help")
-            .help("display this help and exit")
-            .action(ArgAction::Help)
-        )
-        .arg(Arg::new("FILE")
-            .action(ArgAction::Append)
-            .value_parser(value_parser!(OsString))
-        )
-        .arg(Arg::new("disassemble")
-            .short('d')
-            .long("disassemble")
-            .help("convert binary .es{s,p,m} file to YAML")
-            .action(ArgAction::SetTrue)
-        )
-        .arg(Arg::new("verbose")
-            .short('v')
-            .long("verbose")
-            .help("verbose mode")
-            .action(ArgAction::SetTrue)
-        )
-        .arg(Arg::new("fit")
-            .short('f')
-            .long("fit")
-            .help("remove redundant trailing zeros and other garbage")
-            .action(ArgAction::SetTrue)
-        )
-        .disable_version_flag(true)
-        .arg(Arg::new("version")
-            .short('V')
-            .long("version")
-            .help("display the version number and exit")
-            .action(ArgAction::SetTrue)
-        )
-        .arg(Arg::new("exclude")
-            .short('e')
-            .long("exclude")
-            .action(ArgAction::Append)
-            .value_name("COND")
-            .help("skip specified records/fields")
-        )
-        .arg(Arg::new("include")
-            .short('i')
-            .long("include")
-            .action(ArgAction::Append)
-            .value_name("COND")
-            .help("skip all but specified records/fields")
-        )
-        .arg(Arg::new("keep")
-            .short('k')
-            .long("keep")
-            .help("keep (don't delete) input files")
-            .action(ArgAction::SetTrue)
-        )
-        .arg(Arg::new("use_stdout")
-            .short('c')
-            .long("stdout")
-            .conflicts_with("keep")
-            .help("write on standard output, keep original files unchanged")
-            .action(ArgAction::SetTrue)
-        )
-        .arg(Arg::new("newline")
-            .short('n')
-            .long("newline")
-            .value_name("NL")
-            .default_value(DEFAULT_NEWLINE)
-            .value_parser(PossibleValuesParser::new([
-                "unix",
-                "dos",
-            ]))
-            .requires("disassemble")
-            .help("newline style")
-        )
-        .dont_collapse_args_in_usage(true)
-        .get_matches()
-    ;
-    if *args.get_one("version").unwrap() {
-        println!(env!("CARGO_PKG_VERSION"));
-        exit(0);
-    }
-    let files = args.get_many::<OsString>("FILE").map_or_else(Vec::new, |v| v.map(|v| if v == HYPHEN {
-        None
-    } else {
-        Some(PathBuf::from(v))
-    }).collect());
-    let fit = *args.get_one("fit").unwrap();
-    let keep = if *args.get_one("use_stdout").unwrap() {
-        None
-    } else {
-        Some(*args.get_one("keep").unwrap())
-    };
-    let disassemble = if *args.get_one("disassemble").unwrap() {
-        Some(match args.get_one::<String>("newline").unwrap().as_ref() {
-            "dos" => "\r\n",
-            "unix" => "\n",
-            _ => unreachable!()
-        })
-    } else {
-        None
-    };
-    let verbose = *args.get_one("verbose").unwrap();
-    let code_page = match args.get_one::<String>("code_page").unwrap().as_ref() {
-        "en" => CodePage::English,
-        "ru" => CodePage::Russian,
-        _ => unreachable!()
-    };
-    let (exclude_records, exclude_fields) = parse_conds(&args, "exclude");
-    let (include_records, include_fields) = parse_conds(&args, "include");
-    (Options {
-        fit, keep, disassemble, verbose, code_page,
-        exclude_records, exclude_fields, include_records, include_fields
-    },
-        files
-    )
-}
-*/
 
 fn main() -> ExitCode {
     let app = current_exe().ok()
@@ -257,6 +127,12 @@ fn main() -> ExitCode {
                 .help("display this help and exit")
                 .action(ArgAction::Help)
             )
+            .arg(Arg::new("skip_unknown")
+                .short('u')
+                .long("skip-unknown")
+                .action(ArgAction::SetTrue)
+                .help("skip unrecognized potions")
+            )
             .arg(Arg::new("code_page")
                 .short('p')
                 .long("code-page")
@@ -311,27 +187,216 @@ fn command_apply(args: &ArgMatches) -> Result<(), String> {
     let balance = {
         let mut source = csv::Reader::from_path(source).map_err(|e| e.to_string())?;
         let mut source = source.records().map(|x| x.map_err(|e| e.to_string()));
-        Balance::from_csv(source).map_err(|e| e.unwrap_or("invalid .csv file".into()))?
+        Balance::from_csv(source).map_err(|e| e.unwrap_or("Invalid .csv file.".into()))?
     };
     let code_page = match args.get_one::<String>("code_page").unwrap().as_ref() {
         "en" => CodePage::English,
         "ru" => CodePage::Russian,
         _ => unreachable!()
     };
+    let skip_unknown = *args.get_one::<bool>("skip_unknown").unwrap();
     let target = Path::new(args.get_one::<OsString>("TARGET.esp").unwrap());
     let metadata = fs::metadata(target).map_err(|x| x.to_string())?;
     let time = FileTime::from_last_modification_time(&metadata);
     let mut potions = HashMap::new();
     collect_potions(target, &mut potions, code_page, false)?;
-    patch_potions(&mut potions, &balance);
+    for potion in potions.values_mut() {
+        patch_potion(potion, &balance, skip_unknown)?;
+    }
     write_potions(target, potions, time, code_page)
 }
 
-fn patch_potions(potions: &mut HashMap<String, Record>, balance: &Balance) {
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+enum Quality {
+    Bargain = 0,
+    Cheap = 1,
+    Standard = 2,
+    Quality = 3,
+    Exclusive = 4
+}
+
+fn potion_quality_and_effect(
+    record: &Record,
+    skip_unknown: bool
+) -> Result<Option<(Option<Quality>, EffectIndex)>, String> {
+    let Field::Potion(data) = &record.fields.iter().find(|(tag, _)| *tag == ALDT).unwrap().1 else { panic!() };
+    if data.auto_calculate_value { return Ok(None); }
+    let id = if let Field::StringZ(ref id) = record.fields.iter().find(|(tag, _)| *tag == NAME).unwrap().1 {
+        id.string.to_uppercase()
+    } else {
+        panic!()
+    };
+    let mut effects = record.fields.iter().filter(|(tag, _)| *tag == ENAM);
+    let Some(effect) = effects.next() else { return Ok(None); };
+    if effects.next().is_some() { return Ok(None); }
+    let effect = if let Field::Effect(effect) = &effect.1 {
+        effect.index.right().ok_or_else(|| format!("Invalid potion '{}'.", id))?
+    } else {
+        panic!()
+    };
+    if effect_kind(effect) == EffectKind::Damage {
+        return Ok(None);
+    }
+    if effect_attributes(effect) == EffectAttributes::None {
+        return Ok(Some((None, effect)));
+    }
+    let quality = if id.ends_with("_B") || id.ends_with("_B_CHG") {
+        Some(Quality::Bargain)
+    } else if id.ends_with("_C") || id.ends_with("_C_CHG") {
+        Some(Quality::Cheap)
+    } else if id.ends_with("_S") || id.ends_with("_S_CHG") {
+        Some(Quality::Standard)
+    } else if id.ends_with("_Q") || id.ends_with("_Q_CHG") {
+        Some(Quality::Quality)
+    } else if id.ends_with("_E") || id.ends_with("_E_CHG") {
+        Some(Quality::Exclusive)
+    } else {
+        None
+    };
+    match quality {
+        None => if skip_unknown {
+            Ok(None)
+        } else {
+            Err(format!("Unknown potion '{}'. Use '--skip-unknown' flag to skip unrecognized potions.", id))
+        },
+        Some(quality) => Ok(Some((Some(quality), effect)))
+    }
+}
+
+fn potion_value(quality: Option<Quality>, effect: EffectIndex, balance: &Balance) -> Option<u32> {
+    Some(match (quality, effect) {
+        (None, EffectIndex::Mark) => balance.without_quality_value.mark,
+        (None, EffectIndex::Recall) => balance.without_quality_value.teleport,
+        (None, EffectIndex::DivineIntervention) => balance.without_quality_value.teleport,
+        (None, EffectIndex::AlmsiviIntervention) => balance.without_quality_value.teleport,
+        (None, EffectIndex::CurePoison) => balance.without_quality_value.cure_poison_or_paralyzation,
+        (None, EffectIndex::CureParalyzation) => balance.without_quality_value.cure_poison_or_paralyzation,
+        (None, EffectIndex::CureCommonDisease) => balance.without_quality_value.cure_common_disease,
+        (None, EffectIndex::CureBlightDisease) => balance.without_quality_value.cure_blight_disease,
+        (None, EffectIndex::Vampirism) => balance.without_quality_value.vampirism,
+        (None, _) => return None,
+        (Some(Quality::Bargain), _) => balance.with_quality_value.bargain,
+        (Some(Quality::Cheap), _) => balance.with_quality_value.cheap,
+        (Some(Quality::Standard), _) => balance.with_quality_value.standard,
+        (Some(Quality::Quality), _) => balance.with_quality_value.quality,
+        (Some(Quality::Exclusive), _) => balance.with_quality_value.exclusive,
+    })
+}
+
+fn potion_weight(quality: Option<Quality>, effect: EffectIndex, balance: &Balance) -> Option<f32> {
+    Some(match (quality, effect) {
+        (None, EffectIndex::Mark) => balance.without_quality_weight.mark,
+        (None, EffectIndex::Recall) => balance.without_quality_weight.teleport,
+        (None, EffectIndex::DivineIntervention) => balance.without_quality_weight.teleport,
+        (None, EffectIndex::AlmsiviIntervention) => balance.without_quality_weight.teleport,
+        (None, EffectIndex::CurePoison) => balance.without_quality_weight.cure_poison_or_paralyzation,
+        (None, EffectIndex::CureParalyzation) => balance.without_quality_weight.cure_poison_or_paralyzation,
+        (None, EffectIndex::CureCommonDisease) => balance.without_quality_weight.cure_common_disease,
+        (None, EffectIndex::CureBlightDisease) => balance.without_quality_weight.cure_blight_disease,
+        (None, EffectIndex::Vampirism) => balance.without_quality_weight.vampirism,
+        (None, _) => return None,
+        (Some(Quality::Bargain), _) => balance.with_quality_weight.bargain,
+        (Some(Quality::Cheap), _) => balance.with_quality_weight.cheap,
+        (Some(Quality::Standard), _) => balance.with_quality_weight.standard,
+        (Some(Quality::Quality), _) => balance.with_quality_weight.quality,
+        (Some(Quality::Exclusive), _) => balance.with_quality_weight.exclusive,
+    })
+}
+
+fn patch_potion(record: &mut Record, balance: &Balance, skip_unknown: bool) -> Result<(), String> {
+    let Some((quality, effect)) = potion_quality_and_effect(record, skip_unknown)? else {
+        return Ok(());
+    };
+    if let Some(value) = potion_value(quality, effect, balance) {
+        set_potion_value(record, value);
+    }
+    if let Some(weight) = potion_weight(quality, effect, balance) {
+        set_potion_weight(record, weight);
+    }
+    /*
+    patch_potion_weight(record, balance)?;
+    let effect = potion_effect(record)?;
+    match effect_attributes(effect) {
+        EffectAttributes::None => { },
+        EffectAttributes::Duration => {
+            if let Some(level) = level {
+                set_potion_duration(record, values[15 + level as usize]);
+            } else {
+                set_potion_duration(record, values[33]);
+            }
+        },
+        EffectAttributes::Magnitude => {
+            if let Some(level) = level {
+                set_potion_magnitude(record, values[20 + level as usize]);
+            } else {
+                set_potion_magnitude(record, values[34]);
+            }
+        },
+        EffectAttributes::DurationAndMagnitude => {
+            if let Some(level) = level {
+                set_potion_duration(record, values[5 + level as usize]);
+                set_potion_magnitude(record, values[10 + level as usize]);
+            } else {
+                set_potion_duration(record, values[31]);
+                set_potion_magnitude(record, values[32]);
+            }
+        },
+        EffectAttributes::CommonDurationAndMagnitude => {
+            if let Some(level) = level {
+                set_potion_duration(record, values[30]);
+                set_potion_magnitude(record, values[25 + level as usize]);
+            } else {
+                set_potion_duration(record, values[31]);
+                set_potion_magnitude(record, values[32]);
+            }
+        }
+    }
+    */
+    Ok(())
+}
+
+/*
+fn set_potion_duration(record: &mut Record, duration: u16) {
+    let data = record.fields.iter_mut().find(|(tag, _)| *tag == ENAM).unwrap();
+    if let Field::Effect(data) = &mut data.1 {
+        data.duration = duration as i32;
+    } else {
+        panic!()
+    }
+}
+
+fn set_potion_magnitude(record: &mut Record, magnitude: u16) {
+    let data = record.fields.iter_mut().find(|(tag, _)| *tag == ENAM).unwrap();
+    if let Field::Effect(data) = &mut data.1 {
+        data.magnitude_min = magnitude as i32;
+        data.magnitude_max = data.magnitude_min;
+    } else {
+        panic!()
+    }
+}
+*/
+
+fn set_potion_value(record: &mut Record, value: u32) {
+    let data = record.fields.iter_mut().find(|(tag, _)| *tag == ALDT).unwrap();
+    if let Field::Potion(data) = &mut data.1 {
+        data.value = value;
+    } else {
+        panic!()
+    }
+}
+
+fn set_potion_weight(record: &mut Record, value: f32) {
+    let data = record.fields.iter_mut().find(|(tag, _)| *tag == ALDT).unwrap();
+    if let Field::Potion(data) = &mut data.1 {
+        data.weight = value;
+    } else {
+        panic!()
+    }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 enum EffectKind {
+    Damage,
     Restore,
     Other,
 }
@@ -346,9 +411,15 @@ enum EffectAttributes {
 
 fn effect_kind(effect: EffectIndex) -> EffectKind {
     match effect {
+        EffectIndex::FireDamage => EffectKind::Damage,
+        EffectIndex::FrostDamage => EffectKind::Damage,
+        EffectIndex::ShockDamage => EffectKind::Damage,
         EffectIndex::RestoreHealth => EffectKind::Restore,
         EffectIndex::RestoreSpellPoints => EffectKind::Restore,
         EffectIndex::RestoreFatigue => EffectKind::Restore,
+        EffectIndex::DamageHealth => EffectKind::Restore,
+        EffectIndex::DamageMagicka => EffectKind::Restore,
+        EffectIndex::DamageFatigue => EffectKind::Restore,
         _ => EffectKind::Other,
     }
 }
@@ -442,7 +513,6 @@ struct Balance {
 
 impl Balance {
     fn from_csv(mut csv: impl Iterator<Item=Result<StringRecord, String>>) -> Result<Self, Option<String>> {
-        csv.next().ok_or(None)?.map_err(Some)?;
         let mut balance = Balance {
             without_quality_value: WithoutQuality {
                 mark: 0,
@@ -875,9 +945,9 @@ fn command_scan(args: &ArgMatches) -> Result<(), String> {
             }
         }
     }
-    let Some(max_time) = max_time else { return Err("potions not found".into()); };
+    let Some(max_time) = max_time else { return Err("Potions not found.".into()); };
     let max_time = max_time.unix_seconds();
-    if i64::MAX - max_time < 120 { return Err("file time limit exceeded".into()); }
+    if i64::MAX - max_time < 120 { return Err("File is too new: time limit exceeded.".into()); }
     let output_time = FileTime::from_unix_time(max_time + 120, 0);
     let output = Path::new(args.get_one::<OsString>("output").unwrap());
     write_potions(output, potions, output_time, code_page)
@@ -972,21 +1042,21 @@ fn collect_potions(
 ) -> Result<bool, String> {
     let mut file = File::open(path).map_err(|x| x.to_string())?;
     let mut records = Records::new(code_page, RecordReadMode::Lenient, 0, &mut file);
-    let file_header = records.next().ok_or_else(|| format!("{}: invalid file", path.display()))?;
-    let file_header = file_header.map_err(|_| format!("{}: invalid file", path.display()))?;
-    let (_, file_header) = file_header.fields.first().ok_or_else(|| format!("{}: invalid file", path.display()))?;
+    let file_header = records.next().ok_or_else(|| format!("'{}': invalid file.", path.display()))?;
+    let file_header = file_header.map_err(|_| format!("'{}': invalid file.", path.display()))?;
+    let (_, file_header) = file_header.fields.first().ok_or_else(|| format!("'{}': invalid file.", path.display()))?;
     if let Field::FileMetadata(file_header) = file_header {
         if skip_balance_plugin && file_header.author == "potions_balance" { return Ok(false); }
     } else {
-        return Err(format!("{}: invalid file", path.display()));
+        return Err(format!("'{}': invalid file.", path.display()));
     }
     let mut has_potions = false;
     for record in records {
         let record = match record {
             Err(error) => match error.source() {
-                Right(error) => return Err(format!("{}: {}", path.display(), error)),
+                Right(error) => return Err(format!("'{}': {}.", path.display(), error)),
                 Left(error) => if error.record_tag() == ALCH {
-                    return Err(format!("{}: {}", path.display(), error));
+                    return Err(format!("'{}': {}.", path.display(), error));
                 } else {
                     continue;
                 }
@@ -995,7 +1065,7 @@ fn collect_potions(
         };
         if record.tag != ALCH { continue; }
         let id = if let Field::StringZ(ref id) = record.fields.iter().find(|(tag, _)| *tag == NAME)
-            .ok_or_else(|| format!("{}: missing ID field in Alchemy record", path.display()))?.1 {
+            .ok_or_else(|| format!("'{}': missing NAME field in ALCH record.", path.display()))?.1 {
             id.string.to_uppercase()
         } else {
             panic!()
