@@ -1,5 +1,7 @@
 #![feature(result_flattening)]
 
+#![deny(warnings)]
+
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
 use clap::builder::PossibleValuesParser;
 use csv::StringRecord;
@@ -16,7 +18,7 @@ use std::collections::HashMap;
 use std::env::current_exe;
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::io::{self, BufWriter, Read};
+use std::io::{BufWriter, Read};
 use std::mem::transmute;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -127,12 +129,6 @@ fn main() -> ExitCode {
                 .help("display this help and exit")
                 .action(ArgAction::Help)
             )
-            .arg(Arg::new("skip_unknown")
-                .short('u')
-                .long("skip-unknown")
-                .action(ArgAction::SetTrue)
-                .help("skip unrecognized potions")
-            )
             .arg(Arg::new("code_page")
                 .short('p')
                 .long("code-page")
@@ -186,7 +182,7 @@ fn command_apply(args: &ArgMatches) -> Result<(), String> {
     let source = Path::new(args.get_one::<OsString>("source").unwrap());
     let balance = {
         let mut source = csv::Reader::from_path(source).map_err(|e| e.to_string())?;
-        let mut source = source.records().map(|x| x.map_err(|e| e.to_string()));
+        let source = source.records().map(|x| x.map_err(|e| e.to_string()));
         Balance::from_csv(source).map_err(|e| e.unwrap_or("Invalid .csv file.".into()))?
     };
     let code_page = match args.get_one::<String>("code_page").unwrap().as_ref() {
@@ -194,14 +190,13 @@ fn command_apply(args: &ArgMatches) -> Result<(), String> {
         "ru" => CodePage::Russian,
         _ => unreachable!()
     };
-    let skip_unknown = *args.get_one::<bool>("skip_unknown").unwrap();
     let target = Path::new(args.get_one::<OsString>("TARGET.esp").unwrap());
     let metadata = fs::metadata(target).map_err(|x| x.to_string())?;
     let time = FileTime::from_last_modification_time(&metadata);
     let mut potions = HashMap::new();
     collect_potions(target, &mut potions, code_page, false)?;
     for potion in potions.values_mut() {
-        patch_potion(potion, &balance, skip_unknown)?;
+        patch_potion(potion, &balance)?;
     }
     write_potions(target, potions, time, code_page)
 }
@@ -217,7 +212,6 @@ enum Quality {
 
 fn potion_quality_and_effect(
     record: &Record,
-    skip_unknown: bool
 ) -> Result<Option<(Option<Quality>, EffectIndex)>, String> {
     let Field::Potion(data) = &record.fields.iter().find(|(tag, _)| *tag == ALDT).unwrap().1 else { panic!() };
     if data.auto_calculate_value { return Ok(None); }
@@ -237,7 +231,7 @@ fn potion_quality_and_effect(
     if effect_kind(effect) == EffectKind::Damage {
         return Ok(None);
     }
-    if effect_attributes(effect) == EffectAttributes::None {
+    if effect_attributes(effect).is_none() {
         return Ok(Some((None, effect)));
     }
     let quality = if id.ends_with("_B") || id.ends_with("_B_CHG") {
@@ -296,8 +290,84 @@ fn potion_weight(quality: Option<Quality>, effect: EffectIndex, balance: &Balanc
     })
 }
 
-fn patch_potion(record: &mut Record, balance: &Balance, skip_unknown: bool) -> Result<(), String> {
-    let Some((quality, effect)) = potion_quality_and_effect(record, skip_unknown)? else {
+fn potion_duration(quality: Quality, effect: EffectIndex, balance: &Balance) -> Option<i32> {
+    let effect_attributes = effect_attributes(effect).unwrap();
+    let restore = effect_kind(effect) == EffectKind::Restore;
+    Some(match (quality, effect_attributes, restore) {
+        (Quality::Bargain, EffectAttributes::Duration, _) =>
+            balance.duration_only.bargain,
+        (Quality::Bargain, EffectAttributes::DurationAndMagnitude, true) =>
+            balance.restore_duration_and_magnitude.bargain.0,
+        (Quality::Bargain, EffectAttributes::DurationAndMagnitude, false) =>
+            balance.others_duration_and_magnitude.bargain.0,
+        (Quality::Cheap, EffectAttributes::Duration, _) =>
+            balance.duration_only.cheap,
+        (Quality::Cheap, EffectAttributes::DurationAndMagnitude, true) =>
+            balance.restore_duration_and_magnitude.cheap.0,
+        (Quality::Cheap, EffectAttributes::DurationAndMagnitude, false) =>
+            balance.others_duration_and_magnitude.cheap.0,
+        (Quality::Standard, EffectAttributes::Duration, _) =>
+            balance.duration_only.standard,
+        (Quality::Standard, EffectAttributes::DurationAndMagnitude, true) =>
+            balance.restore_duration_and_magnitude.standard.0,
+        (Quality::Standard, EffectAttributes::DurationAndMagnitude, false) =>
+            balance.others_duration_and_magnitude.standard.0,
+        (Quality::Quality, EffectAttributes::Duration, _) =>
+            balance.duration_only.quality,
+        (Quality::Quality, EffectAttributes::DurationAndMagnitude, true) =>
+            balance.restore_duration_and_magnitude.quality.0,
+        (Quality::Quality, EffectAttributes::DurationAndMagnitude, false) =>
+            balance.others_duration_and_magnitude.quality.0,
+        (Quality::Exclusive, EffectAttributes::Duration, _) =>
+            balance.duration_only.exclusive,
+        (Quality::Exclusive, EffectAttributes::DurationAndMagnitude, true) =>
+            balance.restore_duration_and_magnitude.exclusive.0,
+        (Quality::Exclusive, EffectAttributes::DurationAndMagnitude, false) =>
+            balance.others_duration_and_magnitude.exclusive.0,
+        _ => return None
+    })
+}
+
+fn potion_magnitude(quality: Quality, effect: EffectIndex, balance: &Balance) -> Option<i32> {
+    let effect_attributes = effect_attributes(effect).unwrap();
+    let restore = effect_kind(effect) == EffectKind::Restore;
+    Some(match (quality, effect_attributes, restore) {
+        (Quality::Bargain, EffectAttributes::Magnitude, _) =>
+            balance.magnitude_only.bargain,
+        (Quality::Bargain, EffectAttributes::DurationAndMagnitude, true) =>
+            balance.restore_duration_and_magnitude.bargain.1,
+        (Quality::Bargain, EffectAttributes::DurationAndMagnitude, false) =>
+            balance.others_duration_and_magnitude.bargain.1,
+        (Quality::Cheap, EffectAttributes::Magnitude, _) =>
+            balance.magnitude_only.cheap,
+        (Quality::Cheap, EffectAttributes::DurationAndMagnitude, true) =>
+            balance.restore_duration_and_magnitude.cheap.1,
+        (Quality::Cheap, EffectAttributes::DurationAndMagnitude, false) =>
+            balance.others_duration_and_magnitude.cheap.1,
+        (Quality::Standard, EffectAttributes::Magnitude, _) =>
+            balance.magnitude_only.standard,
+        (Quality::Standard, EffectAttributes::DurationAndMagnitude, true) =>
+            balance.restore_duration_and_magnitude.standard.1,
+        (Quality::Standard, EffectAttributes::DurationAndMagnitude, false) =>
+            balance.others_duration_and_magnitude.standard.1,
+        (Quality::Quality, EffectAttributes::Magnitude, _) =>
+            balance.magnitude_only.quality,
+        (Quality::Quality, EffectAttributes::DurationAndMagnitude, true) =>
+            balance.restore_duration_and_magnitude.quality.1,
+        (Quality::Quality, EffectAttributes::DurationAndMagnitude, false) =>
+            balance.others_duration_and_magnitude.quality.1,
+        (Quality::Exclusive, EffectAttributes::Magnitude, _) =>
+            balance.magnitude_only.exclusive,
+        (Quality::Exclusive, EffectAttributes::DurationAndMagnitude, true) =>
+            balance.restore_duration_and_magnitude.exclusive.1,
+        (Quality::Exclusive, EffectAttributes::DurationAndMagnitude, false) =>
+            balance.others_duration_and_magnitude.exclusive.1,
+        _ => return None
+    })
+}
+
+fn patch_potion(record: &mut Record, balance: &Balance) -> Result<(), String> {
+    let Some((quality, effect)) = potion_quality_and_effect(record)? else {
         return Ok(());
     };
     if let Some(value) = potion_value(quality, effect, balance) {
@@ -306,85 +376,39 @@ fn patch_potion(record: &mut Record, balance: &Balance, skip_unknown: bool) -> R
     if let Some(weight) = potion_weight(quality, effect, balance) {
         set_potion_weight(record, weight);
     }
-    /*
-    patch_potion_weight(record, balance)?;
-    let effect = potion_effect(record)?;
-    match effect_attributes(effect) {
-        EffectAttributes::None => { },
-        EffectAttributes::Duration => {
-            if let Some(level) = level {
-                set_potion_duration(record, values[15 + level as usize]);
-            } else {
-                set_potion_duration(record, values[33]);
-            }
-        },
-        EffectAttributes::Magnitude => {
-            if let Some(level) = level {
-                set_potion_magnitude(record, values[20 + level as usize]);
-            } else {
-                set_potion_magnitude(record, values[34]);
-            }
-        },
-        EffectAttributes::DurationAndMagnitude => {
-            if let Some(level) = level {
-                set_potion_duration(record, values[5 + level as usize]);
-                set_potion_magnitude(record, values[10 + level as usize]);
-            } else {
-                set_potion_duration(record, values[31]);
-                set_potion_magnitude(record, values[32]);
-            }
-        },
-        EffectAttributes::CommonDurationAndMagnitude => {
-            if let Some(level) = level {
-                set_potion_duration(record, values[30]);
-                set_potion_magnitude(record, values[25 + level as usize]);
-            } else {
-                set_potion_duration(record, values[31]);
-                set_potion_magnitude(record, values[32]);
-            }
-        }
+    let Some(quality) = quality else { return Ok(()); };
+    if let Some(duration) = potion_duration(quality, effect, balance) {
+        set_potion_duration(record, duration);
     }
-    */
+    if let Some(magnitude) = potion_magnitude(quality, effect, balance) {
+        set_potion_magnitude(record, magnitude);
+    }
     Ok(())
 }
 
-/*
-fn set_potion_duration(record: &mut Record, duration: u16) {
+fn set_potion_magnitude(record: &mut Record, value: i32) {
     let data = record.fields.iter_mut().find(|(tag, _)| *tag == ENAM).unwrap();
-    if let Field::Effect(data) = &mut data.1 {
-        data.duration = duration as i32;
-    } else {
-        panic!()
-    }
+    let Field::Effect(data) = &mut data.1 else { panic!() };
+    data.magnitude_min = value;
+    data.magnitude_max = value;
 }
 
-fn set_potion_magnitude(record: &mut Record, magnitude: u16) {
+fn set_potion_duration(record: &mut Record, value: i32) {
     let data = record.fields.iter_mut().find(|(tag, _)| *tag == ENAM).unwrap();
-    if let Field::Effect(data) = &mut data.1 {
-        data.magnitude_min = magnitude as i32;
-        data.magnitude_max = data.magnitude_min;
-    } else {
-        panic!()
-    }
+    let Field::Effect(data) = &mut data.1 else { panic!() };
+    data.duration = value;
 }
-*/
 
 fn set_potion_value(record: &mut Record, value: u32) {
     let data = record.fields.iter_mut().find(|(tag, _)| *tag == ALDT).unwrap();
-    if let Field::Potion(data) = &mut data.1 {
-        data.value = value;
-    } else {
-        panic!()
-    }
+    let Field::Potion(data) = &mut data.1 else { panic!() };
+    data.value = value;
 }
 
 fn set_potion_weight(record: &mut Record, value: f32) {
     let data = record.fields.iter_mut().find(|(tag, _)| *tag == ALDT).unwrap();
-    if let Field::Potion(data) = &mut data.1 {
-        data.weight = value;
-    } else {
-        panic!()
-    }
+    let Field::Potion(data) = &mut data.1 else { panic!() };
+    data.weight = value;
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -396,7 +420,6 @@ enum EffectKind {
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 enum EffectAttributes {
-    None,
     Duration,
     Magnitude,
     DurationAndMagnitude,
@@ -417,62 +440,62 @@ fn effect_kind(effect: EffectIndex) -> EffectKind {
     }
 }
 
-fn effect_attributes(effect: EffectIndex) -> EffectAttributes {
+fn effect_attributes(effect: EffectIndex) -> Option<EffectAttributes> {
     match effect {
-        EffectIndex::WaterBreathing => EffectAttributes::Duration,
-        EffectIndex::WaterWalking => EffectAttributes::Duration,
-        EffectIndex::Invisibility => EffectAttributes::Duration,
-        EffectIndex::Paralyze => EffectAttributes::Duration,
-        EffectIndex::Silence => EffectAttributes::Duration,
-        EffectIndex::Dispel => EffectAttributes::Magnitude,
-        EffectIndex::Mark => EffectAttributes::None,
-        EffectIndex::Recall => EffectAttributes::None,
-        EffectIndex::DivineIntervention => EffectAttributes::None,
-        EffectIndex::AlmsiviIntervention => EffectAttributes::None,
-        EffectIndex::CureCommonDisease => EffectAttributes::None,
-        EffectIndex::CureBlightDisease => EffectAttributes::None,
-        EffectIndex::CureCorprusDisease => EffectAttributes::None,
-        EffectIndex::CurePoison => EffectAttributes::None,
-        EffectIndex::CureParalyzation => EffectAttributes::None,
-        EffectIndex::RestoreAttribute => EffectAttributes::Magnitude,
-        EffectIndex::RestoreSkill => EffectAttributes::Magnitude,
-        EffectIndex::SummonScamp => EffectAttributes::Duration,
-        EffectIndex::SummonClannfear => EffectAttributes::Duration,
-        EffectIndex::SummonDaedroth => EffectAttributes::Duration,
-        EffectIndex::SummonDremora => EffectAttributes::Duration,
-        EffectIndex::SummonAncestralGhost => EffectAttributes::Duration,
-        EffectIndex::SummonSkeletalMinion => EffectAttributes::Duration,
-        EffectIndex::SummonLeastBonewalker => EffectAttributes::Duration,
-        EffectIndex::SummonGreaterBonewalker => EffectAttributes::Duration,
-        EffectIndex::SummonBonelord => EffectAttributes::Duration,
-        EffectIndex::SummonWingedTwilight => EffectAttributes::Duration,
-        EffectIndex::SummonHunger => EffectAttributes::Duration,
-        EffectIndex::SummonGoldensaint => EffectAttributes::Duration,
-        EffectIndex::SummonFlameAtronach => EffectAttributes::Duration,
-        EffectIndex::SummonFrostAtronach => EffectAttributes::Duration,
-        EffectIndex::SummonStormAtronach => EffectAttributes::Duration,
-        EffectIndex::BoundDagger => EffectAttributes::Duration,
-        EffectIndex::BoundLongsword => EffectAttributes::Duration,
-        EffectIndex::BoundMace => EffectAttributes::Duration,
-        EffectIndex::BoundBattleAxe => EffectAttributes::Duration,
-        EffectIndex::BoundSpear => EffectAttributes::Duration,
-        EffectIndex::BoundLongbow => EffectAttributes::Duration,
-        EffectIndex::BoundCuirass => EffectAttributes::Duration,
-        EffectIndex::BoundHelm => EffectAttributes::Duration,
-        EffectIndex::BoundBoots => EffectAttributes::Duration,
-        EffectIndex::BoundShield => EffectAttributes::Duration,
-        EffectIndex::BoundGloves => EffectAttributes::Duration,
-        EffectIndex::Corpus => EffectAttributes::Duration,
-        EffectIndex::Vampirism => EffectAttributes::None,
-        EffectIndex::SummonCenturionSphere => EffectAttributes::Duration,
-        EffectIndex::SummonFabricant => EffectAttributes::Duration,
-        EffectIndex::SummonCreature01 => EffectAttributes::Duration,
-        EffectIndex::SummonCreature02 => EffectAttributes::Duration,
-        EffectIndex::SummonCreature03 => EffectAttributes::Duration,
-        EffectIndex::SummonCreature04 => EffectAttributes::Duration,
-        EffectIndex::SummonCreature05 => EffectAttributes::Duration,
-        EffectIndex::StuntedMagicka => EffectAttributes::Duration,
-        _ => EffectAttributes::DurationAndMagnitude
+        EffectIndex::WaterBreathing => Some(EffectAttributes::Duration),
+        EffectIndex::WaterWalking => Some(EffectAttributes::Duration),
+        EffectIndex::Invisibility => Some(EffectAttributes::Duration),
+        EffectIndex::Paralyze => Some(EffectAttributes::Duration),
+        EffectIndex::Silence => Some(EffectAttributes::Duration),
+        EffectIndex::Dispel => Some(EffectAttributes::Magnitude),
+        EffectIndex::Mark => None,
+        EffectIndex::Recall => None,
+        EffectIndex::DivineIntervention => None,
+        EffectIndex::AlmsiviIntervention => None,
+        EffectIndex::CureCommonDisease => None,
+        EffectIndex::CureBlightDisease => None,
+        EffectIndex::CureCorprusDisease => None,
+        EffectIndex::CurePoison => None,
+        EffectIndex::CureParalyzation => None,
+        EffectIndex::RestoreAttribute => Some(EffectAttributes::Magnitude),
+        EffectIndex::RestoreSkill => Some(EffectAttributes::Magnitude),
+        EffectIndex::SummonScamp => Some(EffectAttributes::Duration),
+        EffectIndex::SummonClannfear => Some(EffectAttributes::Duration),
+        EffectIndex::SummonDaedroth => Some(EffectAttributes::Duration),
+        EffectIndex::SummonDremora => Some(EffectAttributes::Duration),
+        EffectIndex::SummonAncestralGhost => Some(EffectAttributes::Duration),
+        EffectIndex::SummonSkeletalMinion => Some(EffectAttributes::Duration),
+        EffectIndex::SummonLeastBonewalker => Some(EffectAttributes::Duration),
+        EffectIndex::SummonGreaterBonewalker => Some(EffectAttributes::Duration),
+        EffectIndex::SummonBonelord => Some(EffectAttributes::Duration),
+        EffectIndex::SummonWingedTwilight => Some(EffectAttributes::Duration),
+        EffectIndex::SummonHunger => Some(EffectAttributes::Duration),
+        EffectIndex::SummonGoldensaint => Some(EffectAttributes::Duration),
+        EffectIndex::SummonFlameAtronach => Some(EffectAttributes::Duration),
+        EffectIndex::SummonFrostAtronach => Some(EffectAttributes::Duration),
+        EffectIndex::SummonStormAtronach => Some(EffectAttributes::Duration),
+        EffectIndex::BoundDagger => Some(EffectAttributes::Duration),
+        EffectIndex::BoundLongsword => Some(EffectAttributes::Duration),
+        EffectIndex::BoundMace => Some(EffectAttributes::Duration),
+        EffectIndex::BoundBattleAxe => Some(EffectAttributes::Duration),
+        EffectIndex::BoundSpear => Some(EffectAttributes::Duration),
+        EffectIndex::BoundLongbow => Some(EffectAttributes::Duration),
+        EffectIndex::BoundCuirass => Some(EffectAttributes::Duration),
+        EffectIndex::BoundHelm => Some(EffectAttributes::Duration),
+        EffectIndex::BoundBoots => Some(EffectAttributes::Duration),
+        EffectIndex::BoundShield => Some(EffectAttributes::Duration),
+        EffectIndex::BoundGloves => Some(EffectAttributes::Duration),
+        EffectIndex::Corpus => Some(EffectAttributes::Duration),
+        EffectIndex::Vampirism => None,
+        EffectIndex::SummonCenturionSphere => Some(EffectAttributes::Duration),
+        EffectIndex::SummonFabricant => Some(EffectAttributes::Duration),
+        EffectIndex::SummonCreature01 => Some(EffectAttributes::Duration),
+        EffectIndex::SummonCreature02 => Some(EffectAttributes::Duration),
+        EffectIndex::SummonCreature03 => Some(EffectAttributes::Duration),
+        EffectIndex::SummonCreature04 => Some(EffectAttributes::Duration),
+        EffectIndex::SummonCreature05 => Some(EffectAttributes::Duration),
+        EffectIndex::StuntedMagicka => Some(EffectAttributes::Duration),
+        _ => Some(EffectAttributes::DurationAndMagnitude)
     }
 }
 
