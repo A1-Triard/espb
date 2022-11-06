@@ -1,3 +1,5 @@
+#![feature(result_flattening)]
+
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
 use clap::builder::PossibleValuesParser;
 use csv::StringRecord;
@@ -14,7 +16,7 @@ use std::collections::HashMap;
 use std::env::current_exe;
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::io::{BufWriter, Read};
+use std::io::{self, BufWriter, Read};
 use std::mem::transmute;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -212,7 +214,7 @@ fn main() -> ExitCode {
                     "ru",
                 ]))
                 .required(true)
-                .help("text code page")
+                .help("the game language")
             )
         )
         .subcommand(Command::new("init")
@@ -245,6 +247,41 @@ fn main() -> ExitCode {
                 .help("selects one of predefined balances")
             )
         )
+        .subcommand(Command::new("apply")
+            .about("Apply .csv file with potions attributes to base .esp file")
+            .before_help("Apply <SOURCE.csv> with potions attributes to <TARGET.esp> file")
+            .help_template("Usage: {usage}\n\n{before-help}{options}")
+            .arg(Arg::new("help")
+                .short('h')
+                .long("help")
+                .help("display this help and exit")
+                .action(ArgAction::Help)
+            )
+            .arg(Arg::new("code_page")
+                .short('p')
+                .long("code-page")
+                .value_name("LANG")
+                .value_parser(PossibleValuesParser::new([
+                    "en",
+                    "ru",
+                ]))
+                .required(true)
+                .help("the game language")
+            )
+            .arg(Arg::new("source")
+                .short('s')
+                .long("source")
+                .value_name("SOURCE.csv")
+                .value_parser(value_parser!(OsString))
+                .required(true)
+                .help("source .csv file")
+            )
+            .arg(Arg::new("TARGET.esp")
+                .required(true)
+                .action(ArgAction::Set)
+                .value_parser(value_parser!(OsString))
+            )
+        )
         .dont_collapse_args_in_usage(true)
     ;
     let args = app.clone().get_matches();
@@ -255,6 +292,7 @@ fn main() -> ExitCode {
     if let Err(err) = match args.subcommand() {
         Some(("scan", scan)) => command_scan(scan),
         Some(("init", init)) => command_init(init),
+        Some(("apply", apply)) => command_apply(apply),
         Some((c, _)) => panic!("unknown command '{}'", c),
         None => {
             let _ = app.print_help();
@@ -266,6 +304,30 @@ fn main() -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+fn command_apply(args: &ArgMatches) -> Result<(), String> {
+    let source = Path::new(args.get_one::<OsString>("source").unwrap());
+    let balance = {
+        let mut source = csv::Reader::from_path(source).map_err(|e| e.to_string())?;
+        let mut source = source.records().map(|x| x.map_err(|e| e.to_string()));
+        Balance::from_csv(source).map_err(|e| e.unwrap_or("invalid .csv file".into()))?
+    };
+    let code_page = match args.get_one::<String>("code_page").unwrap().as_ref() {
+        "en" => CodePage::English,
+        "ru" => CodePage::Russian,
+        _ => unreachable!()
+    };
+    let target = Path::new(args.get_one::<OsString>("TARGET.esp").unwrap());
+    let metadata = fs::metadata(target).map_err(|x| x.to_string())?;
+    let time = FileTime::from_last_modification_time(&metadata);
+    let mut potions = HashMap::new();
+    collect_potions(target, &mut potions, code_page, false)?;
+    patch_potions(&mut potions, &balance);
+    write_potions(target, potions, time, code_page)
+}
+
+fn patch_potions(potions: &mut HashMap<String, Record>, balance: &Balance) {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -379,6 +441,138 @@ struct Balance {
 }
 
 impl Balance {
+    fn from_csv(mut csv: impl Iterator<Item=Result<StringRecord, String>>) -> Result<Self, Option<String>> {
+        csv.next().ok_or(None)?.map_err(Some)?;
+        let mut balance = Balance {
+            without_quality_value: WithoutQuality {
+                mark: 0,
+                teleport: 0,
+                cure_common_disease: 0,
+                cure_blight_disease: 0,
+                cure_poison_or_paralyzation: 0,
+                vampirism: 0,
+            },
+            with_quality_value: WithQuality {
+                bargain: 0,
+                cheap: 0,
+                standard: 0,
+                quality: 0,
+                exclusive: 0,
+            },
+            without_quality_weight: WithoutQuality {
+                mark: 0.0,
+                teleport: 0.0,
+                cure_common_disease: 0.0,
+                cure_blight_disease: 0.0,
+                cure_poison_or_paralyzation: 0.0,
+                vampirism: 0.0,
+            },
+            with_quality_weight: WithQuality {
+                bargain: 0.0,
+                cheap: 0.0,
+                standard: 0.0,
+                quality: 0.0,
+                exclusive: 0.0,
+            },
+            duration_only: WithQuality {
+                bargain: 0,
+                cheap: 0,
+                standard: 0,
+                quality: 0,
+                exclusive: 0,
+            },
+            magnitude_only: WithQuality {
+                bargain: 0,
+                cheap: 0,
+                standard: 0,
+                quality: 0,
+                exclusive: 0,
+            },
+            restore_duration_and_magnitude: WithQuality {
+                bargain: (0, 0),
+                cheap: (0, 0),
+                standard: (0, 0),
+                quality: (0, 0),
+                exclusive: (0, 0),
+            },
+            others_duration_and_magnitude: WithQuality {
+                bargain: (0, 0),
+                cheap: (0, 0),
+                standard: (0, 0),
+                quality: (0, 0),
+                exclusive: (0, 0),
+            },
+        };
+        let row_bargain = csv.next().ok_or(None)?.map_err(Some)?;
+        balance.with_quality_value.bargain = row_bargain.get(1).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.with_quality_weight.bargain = row_bargain.get(2).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.duration_only.bargain = row_bargain.get(3).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.magnitude_only.bargain = row_bargain.get(4).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.restore_duration_and_magnitude.bargain.0 = row_bargain.get(5).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.restore_duration_and_magnitude.bargain.1 = row_bargain.get(6).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.others_duration_and_magnitude.bargain.0 = row_bargain.get(7).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.others_duration_and_magnitude.bargain.1 = row_bargain.get(8).ok_or(None)?.parse().map_err(|_| None)?;
+        let row_cheap = csv.next().ok_or(None)?.map_err(Some)?;
+        balance.with_quality_value.cheap = row_cheap.get(1).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.with_quality_weight.cheap = row_cheap.get(2).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.duration_only.cheap = row_cheap.get(3).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.magnitude_only.cheap = row_cheap.get(4).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.restore_duration_and_magnitude.cheap.0 = row_cheap.get(5).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.restore_duration_and_magnitude.cheap.1 = row_cheap.get(6).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.others_duration_and_magnitude.cheap.0 = row_cheap.get(7).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.others_duration_and_magnitude.cheap.1 = row_cheap.get(8).ok_or(None)?.parse().map_err(|_| None)?;
+        let row_standard = csv.next().ok_or(None)?.map_err(Some)?;
+        balance.with_quality_value.standard = row_standard.get(1).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.with_quality_weight.standard = row_standard.get(2).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.duration_only.standard = row_standard.get(3).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.magnitude_only.standard = row_standard.get(4).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.restore_duration_and_magnitude.standard.0 = row_standard.get(5).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.restore_duration_and_magnitude.standard.1 = row_standard.get(6).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.others_duration_and_magnitude.standard.0 = row_standard.get(7).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.others_duration_and_magnitude.standard.1 = row_standard.get(8).ok_or(None)?.parse().map_err(|_| None)?;
+        let row_quality = csv.next().ok_or(None)?.map_err(Some)?;
+        balance.with_quality_value.quality = row_quality.get(1).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.with_quality_weight.quality = row_quality.get(2).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.duration_only.quality = row_quality.get(3).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.magnitude_only.quality = row_quality.get(4).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.restore_duration_and_magnitude.quality.0 = row_quality.get(5).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.restore_duration_and_magnitude.quality.1 = row_quality.get(6).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.others_duration_and_magnitude.quality.0 = row_quality.get(7).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.others_duration_and_magnitude.quality.1 = row_quality.get(8).ok_or(None)?.parse().map_err(|_| None)?;
+        let row_exclusive = csv.next().ok_or(None)?.map_err(Some)?;
+        balance.with_quality_value.exclusive = row_exclusive.get(1).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.with_quality_weight.exclusive = row_exclusive.get(2).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.duration_only.exclusive = row_exclusive.get(3).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.magnitude_only.exclusive = row_exclusive.get(4).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.restore_duration_and_magnitude.exclusive.0 = row_exclusive.get(5).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.restore_duration_and_magnitude.exclusive.1 = row_exclusive.get(6).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.others_duration_and_magnitude.exclusive.0 = row_exclusive.get(7).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.others_duration_and_magnitude.exclusive.1 = row_exclusive.get(8).ok_or(None)?.parse().map_err(|_| None)?;
+        csv.next().ok_or(None)?.map_err(Some)?;
+        csv.next().ok_or(None)?.map_err(Some)?;
+        let row_mark = csv.next().ok_or(None)?.map_err(Some)?;
+        balance.without_quality_value.mark = row_mark.get(1).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.without_quality_weight.mark = row_mark.get(2).ok_or(None)?.parse().map_err(|_| None)?;
+        let row_teleport = csv.next().ok_or(None)?.map_err(Some)?;
+        balance.without_quality_value.teleport = row_teleport.get(1).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.without_quality_weight.teleport = row_teleport.get(2).ok_or(None)?.parse().map_err(|_| None)?;
+        let row_cure_p_or_p = csv.next().ok_or(None)?.map_err(Some)?;
+        balance.without_quality_value.cure_poison_or_paralyzation =
+            row_cure_p_or_p.get(1).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.without_quality_weight.cure_poison_or_paralyzation =
+            row_cure_p_or_p.get(2).ok_or(None)?.parse().map_err(|_| None)?;
+        let row_cure_c_disease = csv.next().ok_or(None)?.map_err(Some)?;
+        balance.without_quality_value.cure_common_disease = row_cure_c_disease.get(1).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.without_quality_weight.cure_common_disease = row_cure_c_disease.get(2).ok_or(None)?.parse().map_err(|_| None)?;
+        let row_cure_b_disease = csv.next().ok_or(None)?.map_err(Some)?;
+        balance.without_quality_value.cure_blight_disease = row_cure_b_disease.get(1).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.without_quality_weight.cure_blight_disease = row_cure_b_disease.get(2).ok_or(None)?.parse().map_err(|_| None)?;
+        let row_vampirism = csv.next().ok_or(None)?.map_err(Some)?;
+        balance.without_quality_value.vampirism = row_vampirism.get(1).ok_or(None)?.parse().map_err(|_| None)?;
+        balance.without_quality_weight.vampirism = row_vampirism.get(2).ok_or(None)?.parse().map_err(|_| None)?;
+        Ok(balance)
+    }
+
     fn to_csv(&self) -> Vec<StringRecord> {
         let mut rows = Vec::new();
         let mut row_headers = StringRecord::new();
@@ -673,7 +867,7 @@ fn command_scan(args: &ArgMatches) -> Result<(), String> {
             .find(|x| fs::metadata(x).ok().map_or(false, |x| x.is_file()))
             .ok_or_else(|| format!("'{}' not found", file_name.to_string_lossy()))?
         ;
-        if collect_potions(&file, &mut potions, code_page)? {
+        if collect_potions(&file, &mut potions, code_page, true)? {
             let metadata = fs::metadata(file).map_err(|x| x.to_string())?;
             let time = FileTime::from_last_modification_time(&metadata);
             if max_time.map_or(true, |max_time| time > max_time) {
@@ -685,6 +879,16 @@ fn command_scan(args: &ArgMatches) -> Result<(), String> {
     let max_time = max_time.unix_seconds();
     if i64::MAX - max_time < 120 { return Err("file time limit exceeded".into()); }
     let output_time = FileTime::from_unix_time(max_time + 120, 0);
+    let output = Path::new(args.get_one::<OsString>("output").unwrap());
+    write_potions(output, potions, output_time, code_page)
+}
+
+fn write_potions(
+    output: &Path,
+    potions: HashMap<String, Record>,
+    time: FileTime,
+    code_page: CodePage
+) -> Result<(), String> {
     let mut records = Vec::new();
     records.push(Record {
         tag: TES3,
@@ -706,12 +910,11 @@ fn command_scan(args: &ArgMatches) -> Result<(), String> {
     } else {
         panic!()
     }
-    let output = Path::new(args.get_one::<OsString>("output").unwrap());
     {
         let mut output = BufWriter::new(File::create(&output).map_err(|e| e.to_string())?);
         code::serialize_into(&records, &mut output, code_page, true).map_err(|e| e.to_string())?;
     }
-    set_file_mtime(&output, output_time).map_err(|e| e.to_string())?;
+    set_file_mtime(&output, time).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -761,14 +964,19 @@ fn parse_ini(mw_ini: &Path) -> Result<Config, String> {
     })
 }
 
-fn collect_potions(path: &Path, potions: &mut HashMap<String, Record>, code_page: CodePage) -> Result<bool, String> {
+fn collect_potions(
+    path: &Path,
+    potions: &mut HashMap<String, Record>,
+    code_page: CodePage,
+    skip_balance_plugin: bool,
+) -> Result<bool, String> {
     let mut file = File::open(path).map_err(|x| x.to_string())?;
     let mut records = Records::new(code_page, RecordReadMode::Lenient, 0, &mut file);
     let file_header = records.next().ok_or_else(|| format!("{}: invalid file", path.display()))?;
     let file_header = file_header.map_err(|_| format!("{}: invalid file", path.display()))?;
     let (_, file_header) = file_header.fields.first().ok_or_else(|| format!("{}: invalid file", path.display()))?;
     if let Field::FileMetadata(file_header) = file_header {
-        if file_header.author == "potions_balance" { return Ok(false); }
+        if skip_balance_plugin && file_header.author == "potions_balance" { return Ok(false); }
     } else {
         return Err(format!("{}: invalid file", path.display()));
     }
