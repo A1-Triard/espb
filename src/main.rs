@@ -29,7 +29,7 @@ fn main() -> ExitCode {
         .and_then(|x| x.file_stem().map(|x| x.to_os_string()))
         .and_then(|x| x.into_string().ok())
         .map(|x| Box::leak(x.into_boxed_str()) as &str)
-        .unwrap_or("potions_balance");
+        .unwrap_or("potions-balance");
     let mut app = Command::new(app)
         .version(env!("CARGO_PKG_VERSION"))
         .disable_colored_help(true)
