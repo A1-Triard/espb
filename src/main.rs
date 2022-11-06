@@ -386,7 +386,7 @@ impl Balance {
         row_headers.push_field("Value");
         row_headers.push_field("Weight");
         row_headers.push_field("Duration Only");
-        row_headers.push_field("Magnitide Only");
+        row_headers.push_field("Magnitude Only");
         row_headers.push_field("Restore Duration");
         row_headers.push_field("Restore Magnitude");
         row_headers.push_field("Others Duration");
@@ -447,41 +447,66 @@ impl Balance {
         row_exclusive.push_field(&self.others_duration_and_magnitude.exclusive.0.to_string());
         row_exclusive.push_field(&self.others_duration_and_magnitude.exclusive.1.to_string());
         rows.push(row_exclusive);
-        rows.push(StringRecord::new());
+        let mut row_empty = StringRecord::new();
+        for _ in 0 .. 9 {
+            row_empty.push_field("");
+        }
+        rows.push(row_empty);
         let mut row_headers = StringRecord::new();
         row_headers.push_field("");
         row_headers.push_field("Value");
         row_headers.push_field("Weight");
+        for _ in 0 .. 6 {
+            row_headers.push_field("");
+        }
         rows.push(row_headers);
         let mut row_mark = StringRecord::new();
         row_mark.push_field("Mark");
         row_mark.push_field(&self.without_quality_value.mark.to_string());
         row_mark.push_field(&self.without_quality_weight.mark.to_string());
+        for _ in 0 .. 6 {
+            row_mark.push_field("");
+        }
         rows.push(row_mark);
         let mut row_teleport = StringRecord::new();
         row_teleport.push_field("Teleport");
         row_teleport.push_field(&self.without_quality_value.teleport.to_string());
         row_teleport.push_field(&self.without_quality_weight.teleport.to_string());
+        for _ in 0 .. 6 {
+            row_teleport.push_field("");
+        }
         rows.push(row_teleport);
+        let mut row_cure_poison_or_paralyzation = StringRecord::new();
+        row_cure_poison_or_paralyzation.push_field("Cure Poison / Paralyzation");
+        row_cure_poison_or_paralyzation.push_field(&self.without_quality_value.cure_poison_or_paralyzation.to_string());
+        row_cure_poison_or_paralyzation.push_field(&self.without_quality_weight.cure_poison_or_paralyzation.to_string());
+        for _ in 0 .. 6 {
+            row_cure_poison_or_paralyzation.push_field("");
+        }
+        rows.push(row_cure_poison_or_paralyzation);
         let mut row_cure_common_disease = StringRecord::new();
         row_cure_common_disease.push_field("Cure Common Disease");
         row_cure_common_disease.push_field(&self.without_quality_value.cure_common_disease.to_string());
         row_cure_common_disease.push_field(&self.without_quality_weight.cure_common_disease.to_string());
+        for _ in 0 .. 6 {
+            row_cure_common_disease.push_field("");
+        }
         rows.push(row_cure_common_disease);
         let mut row_cure_blight_disease = StringRecord::new();
         row_cure_blight_disease.push_field("Cure Blight Disease");
         row_cure_blight_disease.push_field(&self.without_quality_value.cure_blight_disease.to_string());
         row_cure_blight_disease.push_field(&self.without_quality_weight.cure_blight_disease.to_string());
+        for _ in 0 .. 6 {
+            row_cure_blight_disease.push_field("");
+        }
         rows.push(row_cure_blight_disease);
-        let mut row_cure_poison_or_paralyzation = StringRecord::new();
-        row_cure_poison_or_paralyzation.push_field("Cure Poison/Paralyzation");
-        row_cure_poison_or_paralyzation.push_field(&self.without_quality_value.cure_poison_or_paralyzation.to_string());
-        row_cure_poison_or_paralyzation.push_field(&self.without_quality_weight.cure_poison_or_paralyzation.to_string());
-        rows.push(row_cure_poison_or_paralyzation);
         let mut row_vampirism = StringRecord::new();
         row_vampirism.push_field("Vampirism");
         row_vampirism.push_field(&self.without_quality_value.vampirism.to_string());
         row_vampirism.push_field(&self.without_quality_weight.vampirism.to_string());
+        for _ in 0 .. 6 {
+            row_vampirism.push_field("");
+        }
         rows.push(row_vampirism);
         rows
     }
@@ -616,12 +641,12 @@ fn command_init(args: &ArgMatches) -> Result<(), String> {
         _ => unreachable!()
     };
     let output = Path::new(args.get_one::<OsString>("output").unwrap());
-    /*
     {
-        let mut output = BufWriter::new(File::create(&output).map_err(|e| e.to_string())?);
-        code::serialize_into(&records, &mut output, code_page, true).map_err(|e| e.to_string())?;
+        let mut output = csv::Writer::from_path(output).map_err(|e| e.to_string())?;
+        for row in balance.to_csv() {
+            output.write_record(&row).map_err(|e| e.to_string())?;
+        }
     }
-    */
     Ok(())
 }
 
