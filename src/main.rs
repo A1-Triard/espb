@@ -253,14 +253,7 @@ fn potion_quality_and_effect(
     } else {
         None
     };
-    match quality {
-        None => if skip_unknown {
-            Ok(None)
-        } else {
-            Err(format!("Unknown potion '{}'. Use '--skip-unknown' flag to skip unrecognized potions.", id))
-        },
-        Some(quality) => Ok(Some((Some(quality), effect)))
-    }
+    Ok(Some((quality, effect)))
 }
 
 fn potion_value(quality: Option<Quality>, effect: EffectIndex, balance: &Balance) -> Option<u32> {
