@@ -1,9 +1,11 @@
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
 use clap::builder::PossibleValuesParser;
+use csv::StringRecord;
 use either::{Left, Right};
 use encoding::{DecoderTrap, Encoding};
 use encoding::all::WINDOWS_1251;
 use esl::{ALCH, Field, FileMetadata, FileType, HEDR, NAME, Record, RecordFlags, TES3};
+use esl::EffectIndex;
 use esl::code::{self, CodePage};
 use esl::read::{RecordReadMode, Records};
 use filetime::{FileTime, set_file_mtime};
@@ -175,9 +177,11 @@ fn main() -> ExitCode {
             .action(ArgAction::SetTrue)
         )
         .subcommand(Command::new("scan")
-            .about("scan enabled plugins and build base .esp file with all potions without modifications")
-            .before_help("Scan <CONFIG FILE> for enabled plugins and build base .esp file with all potions without modifications")
-            .help_template("Usage: {usage}\n\n{before-help}{options}")
+            .about("\
+                Scan <CONFIG FILE> for enabled plugins and build <OUTPUT.esp> file \
+                with all potions (without additional modifications\
+            ")
+            .help_template("Usage: {usage}\n\n{about}{options}")
             .arg(Arg::new("help")
                 .short('h')
                 .long("help")
@@ -209,6 +213,35 @@ fn main() -> ExitCode {
                 .help("text code page")
             )
         )
+        .subcommand(Command::new("init")
+            .about("Create <OUTPUT.csv> with potions balance info")
+            .help_template("Usage: {usage}\n\n{about}{options}")
+            .arg(Arg::new("help")
+                .short('h')
+                .long("help")
+                .help("display this help and exit")
+                .action(ArgAction::Help)
+            )
+            .arg(Arg::new("output")
+                .short('o')
+                .long("output")
+                .value_name("OUTPUT.csv")
+                .value_parser(value_parser!(OsString))
+                .required(true)
+                .help("output .csv file")
+            )
+            .arg(Arg::new("type")
+                .short('t')
+                .long("type")
+                .value_name("TYPE")
+                .value_parser(PossibleValuesParser::new([
+                    "original",
+                    "recommended",
+                ]))
+                .required(true)
+                .help("selects one of predefined balances")
+            )
+        )
         .dont_collapse_args_in_usage(true)
     ;
     let args = app.clone().get_matches();
@@ -218,6 +251,7 @@ fn main() -> ExitCode {
     }
     if let Err(err) = match args.subcommand() {
         Some(("scan", scan)) => command_scan(scan),
+        Some(("init", init)) => command_init(init),
         Some((c, _)) => panic!("unknown command '{}'", c),
         None => {
             let _ = app.print_help();
@@ -229,6 +263,363 @@ fn main() -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+enum EffectKind {
+    Restore,
+    Other,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+enum EffectAttributes {
+    None,
+    Duration,
+    Magnitude,
+    DurationAndMagnitude,
+}
+
+fn effect_kind(effect: EffectIndex) -> EffectKind {
+    match effect {
+        EffectIndex::RestoreHealth => EffectKind::Restore,
+        EffectIndex::RestoreSpellPoints => EffectKind::Restore,
+        EffectIndex::RestoreFatigue => EffectKind::Restore,
+        _ => EffectKind::Other,
+    }
+}
+
+fn effect_attributes(effect: EffectIndex) -> EffectAttributes {
+    match effect {
+        EffectIndex::WaterBreathing => EffectAttributes::Duration,
+        EffectIndex::WaterWalking => EffectAttributes::Duration,
+        EffectIndex::Invisibility => EffectAttributes::Duration,
+        EffectIndex::Paralyze => EffectAttributes::Duration,
+        EffectIndex::Silence => EffectAttributes::Duration,
+        EffectIndex::Dispel => EffectAttributes::Magnitude,
+        EffectIndex::Mark => EffectAttributes::None,
+        EffectIndex::Recall => EffectAttributes::None,
+        EffectIndex::DivineIntervention => EffectAttributes::None,
+        EffectIndex::AlmsiviIntervention => EffectAttributes::None,
+        EffectIndex::CureCommonDisease => EffectAttributes::None,
+        EffectIndex::CureBlightDisease => EffectAttributes::None,
+        EffectIndex::CureCorprusDisease => EffectAttributes::None,
+        EffectIndex::CurePoison => EffectAttributes::None,
+        EffectIndex::CureParalyzation => EffectAttributes::None,
+        EffectIndex::RestoreAttribute => EffectAttributes::Magnitude,
+        EffectIndex::RestoreSkill => EffectAttributes::Magnitude,
+        EffectIndex::SummonScamp => EffectAttributes::Duration,
+        EffectIndex::SummonClannfear => EffectAttributes::Duration,
+        EffectIndex::SummonDaedroth => EffectAttributes::Duration,
+        EffectIndex::SummonDremora => EffectAttributes::Duration,
+        EffectIndex::SummonAncestralGhost => EffectAttributes::Duration,
+        EffectIndex::SummonSkeletalMinion => EffectAttributes::Duration,
+        EffectIndex::SummonLeastBonewalker => EffectAttributes::Duration,
+        EffectIndex::SummonGreaterBonewalker => EffectAttributes::Duration,
+        EffectIndex::SummonBonelord => EffectAttributes::Duration,
+        EffectIndex::SummonWingedTwilight => EffectAttributes::Duration,
+        EffectIndex::SummonHunger => EffectAttributes::Duration,
+        EffectIndex::SummonGoldensaint => EffectAttributes::Duration,
+        EffectIndex::SummonFlameAtronach => EffectAttributes::Duration,
+        EffectIndex::SummonFrostAtronach => EffectAttributes::Duration,
+        EffectIndex::SummonStormAtronach => EffectAttributes::Duration,
+        EffectIndex::BoundDagger => EffectAttributes::Duration,
+        EffectIndex::BoundLongsword => EffectAttributes::Duration,
+        EffectIndex::BoundMace => EffectAttributes::Duration,
+        EffectIndex::BoundBattleAxe => EffectAttributes::Duration,
+        EffectIndex::BoundSpear => EffectAttributes::Duration,
+        EffectIndex::BoundLongbow => EffectAttributes::Duration,
+        EffectIndex::BoundCuirass => EffectAttributes::Duration,
+        EffectIndex::BoundHelm => EffectAttributes::Duration,
+        EffectIndex::BoundBoots => EffectAttributes::Duration,
+        EffectIndex::BoundShield => EffectAttributes::Duration,
+        EffectIndex::BoundGloves => EffectAttributes::Duration,
+        EffectIndex::Corpus => EffectAttributes::Duration,
+        EffectIndex::Vampirism => EffectAttributes::None,
+        EffectIndex::SummonCenturionSphere => EffectAttributes::Duration,
+        EffectIndex::SummonFabricant => EffectAttributes::Duration,
+        EffectIndex::SummonCreature01 => EffectAttributes::Duration,
+        EffectIndex::SummonCreature02 => EffectAttributes::Duration,
+        EffectIndex::SummonCreature03 => EffectAttributes::Duration,
+        EffectIndex::SummonCreature04 => EffectAttributes::Duration,
+        EffectIndex::SummonCreature05 => EffectAttributes::Duration,
+        EffectIndex::StuntedMagicka => EffectAttributes::Duration,
+        _ => EffectAttributes::DurationAndMagnitude
+    }
+}
+
+struct WithQuality<T> {
+    bargain: T,
+    cheap: T,
+    standard: T,
+    quality: T,
+    exclusive: T,
+}
+
+struct WithoutQuality<T> {
+    mark: T,
+    teleport: T,
+    cure_common_disease: T,
+    cure_blight_disease: T,
+    cure_poison_or_paralyzation: T,
+    vampirism: T,
+}
+
+struct Balance {
+    without_quality_value: WithoutQuality<u32>,
+    with_quality_value: WithQuality<u32>,
+    without_quality_weight: WithoutQuality<f32>,
+    with_quality_weight: WithQuality<f32>,
+    duration_only: WithQuality<i32>,
+    magnitude_only: WithQuality<i32>,
+    restore_duration_and_magnitude: WithQuality<(i32, i32)>,
+    others_duration_and_magnitude: WithQuality<(i32, i32)>,
+}
+
+impl Balance {
+    fn to_csv(&self) -> Vec<StringRecord> {
+        let mut rows = Vec::new();
+        let mut row_headers = StringRecord::new();
+        row_headers.push_field("");
+        row_headers.push_field("Value");
+        row_headers.push_field("Weight");
+        row_headers.push_field("Duration Only");
+        row_headers.push_field("Magnitide Only");
+        row_headers.push_field("Restore Duration");
+        row_headers.push_field("Restore Magnitude");
+        row_headers.push_field("Others Duration");
+        row_headers.push_field("Others Magnitude");
+        rows.push(row_headers);
+        let mut row_bargain = StringRecord::new();
+        row_bargain.push_field("Bargain");
+        row_bargain.push_field(&self.with_quality_value.bargain.to_string());
+        row_bargain.push_field(&self.with_quality_weight.bargain.to_string());
+        row_bargain.push_field(&self.duration_only.bargain.to_string());
+        row_bargain.push_field(&self.magnitude_only.bargain.to_string());
+        row_bargain.push_field(&self.restore_duration_and_magnitude.bargain.0.to_string());
+        row_bargain.push_field(&self.restore_duration_and_magnitude.bargain.1.to_string());
+        row_bargain.push_field(&self.others_duration_and_magnitude.bargain.0.to_string());
+        row_bargain.push_field(&self.others_duration_and_magnitude.bargain.1.to_string());
+        rows.push(row_bargain);
+        let mut row_cheap = StringRecord::new();
+        row_cheap.push_field("Cheap");
+        row_cheap.push_field(&self.with_quality_value.cheap.to_string());
+        row_cheap.push_field(&self.with_quality_weight.cheap.to_string());
+        row_cheap.push_field(&self.duration_only.cheap.to_string());
+        row_cheap.push_field(&self.magnitude_only.cheap.to_string());
+        row_cheap.push_field(&self.restore_duration_and_magnitude.cheap.0.to_string());
+        row_cheap.push_field(&self.restore_duration_and_magnitude.cheap.1.to_string());
+        row_cheap.push_field(&self.others_duration_and_magnitude.cheap.0.to_string());
+        row_cheap.push_field(&self.others_duration_and_magnitude.cheap.1.to_string());
+        rows.push(row_cheap);
+        let mut row_standard = StringRecord::new();
+        row_standard.push_field("Standard");
+        row_standard.push_field(&self.with_quality_value.standard.to_string());
+        row_standard.push_field(&self.with_quality_weight.standard.to_string());
+        row_standard.push_field(&self.duration_only.standard.to_string());
+        row_standard.push_field(&self.magnitude_only.standard.to_string());
+        row_standard.push_field(&self.restore_duration_and_magnitude.standard.0.to_string());
+        row_standard.push_field(&self.restore_duration_and_magnitude.standard.1.to_string());
+        row_standard.push_field(&self.others_duration_and_magnitude.standard.0.to_string());
+        row_standard.push_field(&self.others_duration_and_magnitude.standard.1.to_string());
+        rows.push(row_standard);
+        let mut row_quality = StringRecord::new();
+        row_quality.push_field("Quality");
+        row_quality.push_field(&self.with_quality_value.quality.to_string());
+        row_quality.push_field(&self.with_quality_weight.quality.to_string());
+        row_quality.push_field(&self.duration_only.quality.to_string());
+        row_quality.push_field(&self.magnitude_only.quality.to_string());
+        row_quality.push_field(&self.restore_duration_and_magnitude.quality.0.to_string());
+        row_quality.push_field(&self.restore_duration_and_magnitude.quality.1.to_string());
+        row_quality.push_field(&self.others_duration_and_magnitude.quality.0.to_string());
+        row_quality.push_field(&self.others_duration_and_magnitude.quality.1.to_string());
+        rows.push(row_quality);
+        let mut row_exclusive = StringRecord::new();
+        row_exclusive.push_field("Exclusive");
+        row_exclusive.push_field(&self.with_quality_value.exclusive.to_string());
+        row_exclusive.push_field(&self.with_quality_weight.exclusive.to_string());
+        row_exclusive.push_field(&self.duration_only.exclusive.to_string());
+        row_exclusive.push_field(&self.magnitude_only.exclusive.to_string());
+        row_exclusive.push_field(&self.restore_duration_and_magnitude.exclusive.0.to_string());
+        row_exclusive.push_field(&self.restore_duration_and_magnitude.exclusive.1.to_string());
+        row_exclusive.push_field(&self.others_duration_and_magnitude.exclusive.0.to_string());
+        row_exclusive.push_field(&self.others_duration_and_magnitude.exclusive.1.to_string());
+        rows.push(row_exclusive);
+        rows.push(StringRecord::new());
+        let mut row_headers = StringRecord::new();
+        row_headers.push_field("");
+        row_headers.push_field("Value");
+        row_headers.push_field("Weight");
+        rows.push(row_headers);
+        let mut row_mark = StringRecord::new();
+        row_mark.push_field("Mark");
+        row_mark.push_field(&self.without_quality_value.mark.to_string());
+        row_mark.push_field(&self.without_quality_weight.mark.to_string());
+        rows.push(row_mark);
+        let mut row_teleport = StringRecord::new();
+        row_teleport.push_field("Teleport");
+        row_teleport.push_field(&self.without_quality_value.teleport.to_string());
+        row_teleport.push_field(&self.without_quality_weight.teleport.to_string());
+        rows.push(row_teleport);
+        let mut row_cure_common_disease = StringRecord::new();
+        row_cure_common_disease.push_field("Cure Common Disease");
+        row_cure_common_disease.push_field(&self.without_quality_value.cure_common_disease.to_string());
+        row_cure_common_disease.push_field(&self.without_quality_weight.cure_common_disease.to_string());
+        rows.push(row_cure_common_disease);
+        let mut row_cure_blight_disease = StringRecord::new();
+        row_cure_blight_disease.push_field("Cure Blight Disease");
+        row_cure_blight_disease.push_field(&self.without_quality_value.cure_blight_disease.to_string());
+        row_cure_blight_disease.push_field(&self.without_quality_weight.cure_blight_disease.to_string());
+        rows.push(row_cure_blight_disease);
+        let mut row_cure_poison_or_paralyzation = StringRecord::new();
+        row_cure_poison_or_paralyzation.push_field("Cure Poison/Paralyzation");
+        row_cure_poison_or_paralyzation.push_field(&self.without_quality_value.cure_poison_or_paralyzation.to_string());
+        row_cure_poison_or_paralyzation.push_field(&self.without_quality_weight.cure_poison_or_paralyzation.to_string());
+        rows.push(row_cure_poison_or_paralyzation);
+        let mut row_vampirism = StringRecord::new();
+        row_vampirism.push_field("Vampirism");
+        row_vampirism.push_field(&self.without_quality_value.vampirism.to_string());
+        row_vampirism.push_field(&self.without_quality_weight.vampirism.to_string());
+        rows.push(row_vampirism);
+        rows
+    }
+}
+
+static ORIGINAL: Balance = Balance {
+    without_quality_value: WithoutQuality {
+        mark: 35,
+        teleport: 35,
+        cure_common_disease: 20,
+        cure_blight_disease: 30,
+        cure_poison_or_paralyzation: 20,
+        vampirism: 5000,
+    },
+    with_quality_value: WithQuality {
+        bargain: 5,
+        cheap: 15,
+        standard: 35,
+        quality: 80,
+        exclusive: 175,
+    },
+    without_quality_weight: WithoutQuality {
+        mark: 1.0,
+        teleport: 1.0,
+        cure_common_disease: 0.5,
+        cure_blight_disease: 0.5,
+        cure_poison_or_paralyzation: 0.5,
+        vampirism: 1.5,
+    },
+    with_quality_weight: WithQuality {
+        bargain: 1.5,
+        cheap: 1.0,
+        standard: 0.75,
+        quality: 0.5,
+        exclusive: 0.25,
+    },
+    duration_only: WithQuality {
+        bargain: 8,
+        cheap: 15,
+        standard: 30,
+        quality: 45,
+        exclusive: 60,
+    },
+    magnitude_only: WithQuality {
+        bargain: 5,
+        cheap: 8,
+        standard: 10,
+        quality: 15,
+        exclusive: 20,
+    },
+    restore_duration_and_magnitude: WithQuality {
+        bargain: (5, 1),
+        cheap: (5, 2),
+        standard: (5, 10),
+        quality: (5, 20),
+        exclusive: (5, 40),
+    },
+    others_duration_and_magnitude: WithQuality {
+        bargain: (8, 5),
+        cheap: (15, 8),
+        standard: (30, 10),
+        quality: (45, 15),
+        exclusive: (60, 20),
+    },
+};
+
+static RECOMMENDED: Balance = Balance {
+    without_quality_value: WithoutQuality {
+        mark: 60,
+        teleport: 120,
+        cure_common_disease: 60,
+        cure_blight_disease: 120,
+        cure_poison_or_paralyzation: 60,
+        vampirism: 5000,
+    },
+    with_quality_value: WithQuality {
+        bargain: 20,
+        cheap: 40,
+        standard: 80,
+        quality: 160,
+        exclusive: 320,
+    },
+    without_quality_weight: WithoutQuality {
+        mark: 0.8,
+        teleport: 0.8,
+        cure_common_disease: 0.4,
+        cure_blight_disease: 0.4,
+        cure_poison_or_paralyzation: 0.4,
+        vampirism: 1.0,
+    },
+    with_quality_weight: WithQuality {
+        bargain: 1.0,
+        cheap: 0.8,
+        standard: 0.6,
+        quality: 0.4,
+        exclusive: 0.2,
+    },
+    duration_only: WithQuality {
+        bargain: 20,
+        cheap: 40,
+        standard: 80,
+        quality: 160,
+        exclusive: 320,
+    },
+    magnitude_only: WithQuality {
+        bargain: 10,
+        cheap: 25,
+        standard: 45,
+        quality: 70,
+        exclusive: 100,
+    },
+    restore_duration_and_magnitude: WithQuality {
+        bargain: (5, 5),
+        cheap: (5, 10),
+        standard: (5, 17),
+        quality: (5, 25),
+        exclusive: (5, 40),
+    },
+    others_duration_and_magnitude: WithQuality {
+        bargain: (20, 10),
+        cheap: (40, 25),
+        standard: (80, 45),
+        quality: (160, 70),
+        exclusive: (320, 100),
+    },
+};
+
+fn command_init(args: &ArgMatches) -> Result<(), String> {
+    let balance = match args.get_one::<String>("type").unwrap().as_ref() {
+        "original" => &ORIGINAL,
+        "recommended" => &RECOMMENDED,
+        _ => unreachable!()
+    };
+    let output = Path::new(args.get_one::<OsString>("output").unwrap());
+    /*
+    {
+        let mut output = BufWriter::new(File::create(&output).map_err(|e| e.to_string())?);
+        code::serialize_into(&records, &mut output, code_page, true).map_err(|e| e.to_string())?;
+    }
+    */
+    Ok(())
 }
 
 const MW_INI: &[u8] = "Morrowind.ini".as_bytes();
