@@ -1,6 +1,6 @@
 [package]
 edition = "2021"
-name = "potions-balance"
+name = "espb"
 version = "0.0.1"
 #rust-version = "nightly"
 authors = ["warlock <internalmike@gmail.com>"]
@@ -9,7 +9,7 @@ readme = "README.md"
 keywords = ["alchemy", "esp", "openmw", "mw", "potions"]
 categories = ["command-line-utilities"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/A1-Triard/potions_balance"
+repository = "https://github.com/A1-Triard/espb"
 
 [profile.release]
 codegen-units = 1

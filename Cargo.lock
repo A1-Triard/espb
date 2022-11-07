@@ -269,6 +269,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "espb"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "csv",
+ "either",
+ "encoding",
+ "esl",
+ "filetime",
+ "rust-ini",
+]
+
+[[package]]
 name = "filetime"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -431,19 +444,6 @@ name = "os_str_bytes"
 version = "6.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3baf96e39c5359d2eb0dd6ccb42c62b91d9678aa68160d261b9e0ccbf9e9dea9"
-
-[[package]]
-name = "potions-balance"
-version = "0.0.1"
-dependencies = [
- "clap",
- "csv",
- "either",
- "encoding",
- "esl",
- "filetime",
- "rust-ini",
-]
 
 [[package]]
 name = "proc-macro2"
