@@ -183,7 +183,7 @@ fn command_apply(args: &ArgMatches) -> Result<(), String> {
     let balance = {
         let mut source = csv::Reader::from_path(source).map_err(|e| e.to_string())?;
         let source = source.records().map(|x| x.map_err(|e| e.to_string()));
-        Balance::from_csv(source).map_err(|e| e.unwrap_or("Invalid .csv file.".into()))?
+        Balance::from_csv(source).map_err(|e| e.unwrap_or_else(|| "Invalid .csv file.".into()))?
     };
     let code_page = match args.get_one::<String>("code_page").unwrap().as_ref() {
         "en" => CodePage::English,
@@ -997,10 +997,10 @@ fn write_potions(
         panic!()
     }
     {
-        let mut output = BufWriter::new(File::create(&output).map_err(|e| e.to_string())?);
+        let mut output = BufWriter::new(File::create(output).map_err(|e| e.to_string())?);
         code::serialize_into(&records, &mut output, code_page, true).map_err(|e| e.to_string())?;
     }
-    set_file_mtime(&output, time).map_err(|e| e.to_string())?;
+    set_file_mtime(output, time).map_err(|e| e.to_string())?;
     Ok(())
 }
 
