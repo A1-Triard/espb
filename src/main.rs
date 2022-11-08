@@ -402,7 +402,9 @@ fn set_potion_duration(record: &mut Record, value: i32) {
 fn set_potion_value(record: &mut Record, value: u32) {
     let data = record.fields.iter_mut().find(|(tag, _)| *tag == ALDT).unwrap();
     let Field::Potion(data) = &mut data.1 else { panic!() };
-    data.value = value;
+    if data.value != 0 {
+        data.value = value;
+    }
 }
 
 fn set_potion_weight(record: &mut Record, value: f32) {
