@@ -30,3 +30,8 @@ jobs:
     - run: "cargo build --verbose --release"
     - run: "cargo outdated --verbose --aggresssive --root-deps-only --exit-code 1"
     - run: "cargo clippy --verbose"
+    - uses: actions/upload-artifact@v3
+      with:
+        name: windows-release
+        path: target/release/espb.exe
+      if: "${{ matrix.os == 'windows-latest' }}"
