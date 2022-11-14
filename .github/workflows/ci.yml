@@ -30,8 +30,18 @@ jobs:
     - run: "cargo build --verbose --release"
     - run: "cargo outdated --verbose --aggresssive --root-deps-only --exit-code 1"
     - run: "cargo clippy --verbose"
+  win_release:
+    strategy:
+      fail-fast: false
+    runs-on: "windows-latest"
+    steps:
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: nightly
+        override: true
+    - run: "rustup target add i686-pc-windows-msvc"
+    - run: "cargo build --verbose --target=i686-pc-windows-msvc --release"
     - uses: actions/upload-artifact@v3
       with:
         name: windows-release
-        path: target/release/espb.exe
-      if: "${{ matrix.os == 'windows-latest' }}"
+        path: target/i686-pc-windows-msvc/release/espb.exe
