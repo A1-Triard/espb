@@ -39,10 +39,10 @@ jobs:
       with:
         toolchain: nightly
         override: true
-    - run: "rustup target add i686-pc-windows-msvc"
+    - run: "rustup target add i686-pc-windows-gnu"
     - uses: actions/checkout@v2
-    - run: "cargo build --verbose --target=i686-pc-windows-msvc --release"
+    - run: "cargo build --verbose --target=i686-pc-windows-gnu --release"
     - uses: actions/upload-artifact@v3
       with:
         name: windows-release
-        path: target/i686-pc-windows-msvc/release/espb.exe
+        path: target/i686-pc-windows-gnu/release/espb.exe
