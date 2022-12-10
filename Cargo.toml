@@ -1,7 +1,7 @@
 [package]
 edition = "2021"
 name = "espb"
-version = "0.0.1"
+version = "0.0.2"
 #rust-version = "nightly"
 authors = ["warlock <internalmike@gmail.com>"]
 description = "Morrowind potions attributes balancing tool."
@@ -22,7 +22,7 @@ clap = "4.0.19"
 csv = "1.1.6"
 either = "1.8.0"
 encoding = "0.2.33"
-esl = "0.10.1"
+esl = "0.11.2"
 filetime = "0.2.18"
 rust-ini = "0.18.0"
 

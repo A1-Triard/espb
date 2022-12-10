@@ -165,13 +165,13 @@ fn main() -> ExitCode {
         Some(("scan", scan)) => command_scan(scan),
         Some(("init", init)) => command_init(init),
         Some(("apply", apply)) => command_apply(apply),
-        Some((c, _)) => panic!("unknown command '{}'", c),
+        Some((c, _)) => panic!("unknown command '{c}'"),
         None => {
             let _ = app.print_help();
             return ExitCode::from(2);
         },
     } {
-        eprintln!("{}", err);
+        eprintln!("{err}");
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
@@ -224,7 +224,7 @@ fn potion_quality_and_effect(
     let Some(effect) = effects.next() else { return Ok(None); };
     if effects.next().is_some() { return Ok(None); }
     let effect = if let Field::Effect(effect) = &effect.1 {
-        effect.index.right().ok_or_else(|| format!("Invalid potion '{}'.", id))?
+        effect.index.right().ok_or_else(|| format!("Invalid potion '{id}'."))?
     } else {
         panic!()
     };
