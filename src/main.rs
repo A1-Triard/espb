@@ -8,12 +8,13 @@ use csv::StringRecord;
 use either::{Left, Right};
 use encoding::{DecoderTrap, Encoding};
 use encoding::all::WINDOWS_1251;
-use esl::{ALCH, ALDT, ENAM, Field, FileMetadata, FileType, HEDR, NAME, Record, RecordFlags, TES3};
-use esl::EffectIndex;
-use esl::code::{self, CodePage};
+use esl::{CodePage, ALCH, ALDT, ENAM, Field, FileMetadata, FileType, HEDR, NAME, Record, RecordFlags, TES3};
+use esl::{EffectIndex, RecordSerde};
+use esl::code::{self};
 use esl::read::{RecordReadMode, Records};
 use filetime::{FileTime, set_file_mtime};
 use ini::Ini;
+use serde_serialize_seed::{ValueWithSeed, VecSerde};
 use std::collections::HashMap;
 use std::env::current_exe;
 use std::ffi::OsString;
@@ -1000,7 +1001,9 @@ fn write_potions(
     }
     {
         let mut output = BufWriter::new(File::create(output).map_err(|e| e.to_string())?);
-        code::serialize_into(&records, &mut output, code_page, true).map_err(|e| e.to_string())?;
+        code::serialize_into(
+            &ValueWithSeed(&records[..], VecSerde(RecordSerde { code_page: Some(code_page) })), &mut output, true
+        ).map_err(|e| e.to_string())?;
     }
     set_file_mtime(output, time).map_err(|e| e.to_string())?;
     Ok(())
