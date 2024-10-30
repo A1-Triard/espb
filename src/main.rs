@@ -986,8 +986,8 @@ fn write_potions(
             (HEDR, Field::FileMetadata(FileMetadata {
                 version: 1067869798,
                 file_type: FileType::ESP,
-                author: "potions_balance".to_string(),
-                description: vec!["Potions balance.".into()],
+                author: Right("potions_balance".to_string()),
+                description: Right(vec!["Potions balance.".into()]),
                 records: 0
             }))
         ]
@@ -1002,7 +1002,7 @@ fn write_potions(
     {
         let mut output = BufWriter::new(File::create(output).map_err(|e| e.to_string())?);
         code::serialize_into(
-            &ValueWithSeed(&records[..], VecSerde(RecordSerde { code_page: Some(code_page) })), &mut output, true
+            &ValueWithSeed(&records[..], VecSerde(RecordSerde { code_page: Some(code_page), omwsave: false })), &mut output, true
         ).map_err(|e| e.to_string())?;
     }
     set_file_mtime(output, time).map_err(|e| e.to_string())?;
@@ -1062,12 +1062,12 @@ fn collect_potions(
     skip_balance_plugin: bool,
 ) -> Result<bool, String> {
     let mut file = File::open(path).map_err(|x| x.to_string())?;
-    let mut records = Records::new(code_page, RecordReadMode::Lenient, 0, &mut file);
+    let mut records = Records::new(code_page, RecordReadMode::Lenient, false, 0, &mut file);
     let file_header = records.next().ok_or_else(|| format!("'{}': invalid file.", path.display()))?;
     let file_header = file_header.map_err(|_| format!("'{}': invalid file.", path.display()))?;
     let (_, file_header) = file_header.fields.first().ok_or_else(|| format!("'{}': invalid file.", path.display()))?;
     if let Field::FileMetadata(file_header) = file_header {
-        if skip_balance_plugin && file_header.author == "potions_balance" { return Ok(false); }
+        if skip_balance_plugin && file_header.author == Right("potions_balance".into()) { return Ok(false); }
     } else {
         return Err(format!("'{}': invalid file.", path.display()));
     }
