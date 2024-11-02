@@ -19,11 +19,11 @@ use std::collections::HashMap;
 use std::env::current_exe;
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::io::{BufWriter, Read};
+use std::io::{self, BufWriter, Read, BufReader, BufRead};
 use std::mem::transmute;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::str::FromStr;
+use std::str::{self, FromStr};
 
 fn main() -> ExitCode {
     let app = current_exe().ok()
@@ -1014,19 +1014,44 @@ struct Config {
     file_names: Vec<OsString>,
 }
 
+fn eof(reader: &mut dyn BufRead) -> io::Result<bool> {
+    loop {
+        match reader.fill_buf() {
+            Ok(buf) => return Ok(buf.is_empty()),
+            Err(e) if e.kind() != io::ErrorKind::Interrupted => return Err(e),
+            _ => { },
+        }
+    }
+}
+
 fn parse_cfg(mw_cfg: &Path) -> Result<Config, String> {
-    let mut ini = Vec::new();
-    File::open(mw_cfg).and_then(|mut x| x.read_to_end(&mut ini)).map_err(|x| x.to_string())?;
-    let ini = String::from_utf8(ini).map_err(|x| x.to_string())?;
-    let ini = Ini::load_from_str(&ini).map_err(|x| x.to_string())?;
     let mut config = Config {
         data_folders: Vec::new(),
         file_names: Vec::new(),
     };
-    for (key, value) in ini.general_section().iter() {
+    let file = File::open(mw_cfg).map_err(|x| x.to_string())?;
+    let mut reader = BufReader::new(file);
+    loop {
+        if eof(&mut reader).map_err(|x| x.to_string())? { break; }
+        let mut line = Vec::new();
+        reader.read_until(b'\n', &mut line).map_err(|x| x.to_string())?;
+        let line = if line.ends_with(&[b'\n']) {
+            &line[.. line.len() - 1]
+        } else {
+            &line[..]
+        };
+        let eq = line.iter().enumerate().find(|(_, &b)| b == b'=').map_or(line.len(), |(i, _)| i);
+        let key = &line[.. eq];
+        let value = &line[eq ..];
         match key {
-            "data" => config.data_folders.push(PathBuf::from_str(value).unwrap()),
-            "content" => config.file_names.push(OsString::from_str(value).unwrap()),
+            b"data" => {
+                let value = str::from_utf8(value).map_err(|x| x.to_string())?;
+                config.data_folders.push(PathBuf::from_str(value).map_err(|x| x.to_string())?);
+            },
+            b"content" => {
+                let value = str::from_utf8(value).map_err(|x| x.to_string())?;
+                config.file_names.push(OsString::from_str(value).map_err(|x| x.to_string())?);
+            },
             _ => { },
         }
     }
