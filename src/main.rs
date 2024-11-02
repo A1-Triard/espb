@@ -1040,9 +1040,9 @@ fn parse_cfg(mw_cfg: &Path) -> Result<Config, String> {
         } else {
             &line[..]
         };
-        let eq = line.iter().enumerate().find(|(_, &b)| b == b'=').map_or(line.len(), |(i, _)| i);
-        let key = &line[.. eq];
-        let value = &line[eq ..];
+        let Some(eq) = line.iter().enumerate().find(|(_, &b)| b == b'=') else { continue; };
+        let key = &line[.. eq.0];
+        let value = &line[eq.0 + 1 ..];
         match key {
             b"data" => {
                 let value = str::from_utf8(value).map_err(|x| x.to_string())?;
