@@ -1046,6 +1046,11 @@ fn parse_cfg(mw_cfg: &Path) -> Result<Config, String> {
         match key {
             b"data" => {
                 let value = str::from_utf8(value).map_err(|x| x.to_string())?;
+                let value = if value.len() >= 2 && value.starts_with('\"') && value.ends_with('\"') {
+                    &value[1 .. value.len() - 1]
+                } else {
+                    value
+                };
                 config.data_folders.push(PathBuf::from_str(value).map_err(|x| x.to_string())?);
             },
             b"content" => {
