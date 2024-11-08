@@ -1035,7 +1035,9 @@ fn parse_cfg(mw_cfg: &Path) -> Result<Config, String> {
         if eof(&mut reader).map_err(|x| x.to_string())? { break; }
         let mut line = Vec::new();
         reader.read_until(b'\n', &mut line).map_err(|x| x.to_string())?;
-        let line = if line.ends_with(&[b'\n']) {
+        let line = if line.ends_with(b"\r\n") {
+            &line[.. line.len() - 2]
+        } else if line.ends_with(b"\n") {
             &line[.. line.len() - 1]
         } else {
             &line[..]
